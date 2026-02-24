@@ -1,0 +1,185 @@
+name: Build and Release Electron App
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'  # Match version tags like v1.0.0, v1.0.0-beta, etc.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            arch: x64
+          - os: macos-latest
+            platform: darwin
+            arch: x64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+
+    runs-on: ${{ matrix.os }}
+    name: Build for ${{ matrix.platform }} (${{ matrix.arch }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=${{ github.event.inputs.version }}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Update version in package.json
+        working-directory: frontend
+        run: |
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version --allow-same-version
+
+      - name: Build application
+        working-directory: frontend
+        run: npm run make
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}-${{ matrix.arch }}
+          path: frontend/out/make/
+          retention-days: 5
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+            IS_PRERELEASE=false
+          else
+            VERSION=${{ github.event.inputs.version }}
+            # Check if version contains pre-release identifiers
+            if [[ "$VERSION" =~ (alpha|beta|rc|-) ]]; then
+              IS_PRERELEASE=true
+            else
+              IS_PRERELEASE=false
+            fi
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Prepare release notes
+        id: release-notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          # IBEX v${{ steps.version.outputs.version }}
+          
+          ## Installation Instructions
+          
+          ### Windows
+          - Download `IBEX-${{ steps.version.outputs.version }}-setup.exe`
+          - Run the installer and follow the prompts
+          
+          ### macOS
+          - Download `IBEX-${{ steps.version.outputs.version }}.dmg` (Intel) or `IBEX-${{ steps.version.outputs.version }}-arm64.dmg` (Apple Silicon)
+          - Open the DMG file and drag IBEX to Applications folder
+          
+          ### Linux (Debian/Ubuntu)
+          - Download `ibex_${{ steps.version.outputs.version }}_amd64.deb`
+          - Run: `sudo apt install ./ibex_${{ steps.version.outputs.version }}_amd64.deb`
+          
+          ### Linux (Red Hat/Fedora)
+          - Download `ibex-${{ steps.version.outputs.version }}-1.x86_64.rpm`
+          - Run: `sudo rpm -i ibex-${{ steps.version.outputs.version }}-1.x86_64.rpm`
+          
+          ## System Requirements
+          - Windows 7 or later (64-bit)
+          - macOS 10.13 or later
+          - Linux with glibc 2.28+
+          
+          ## Release Notes
+          See [CHANGELOG.md](https://github.com/ITER/IBEX/blob/main/CHANGELOG.md) for detailed changes.
+          EOF
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: IBEX v${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          draft: false
+          prerelease: ${{ steps.version.outputs.is_prerelease }}
+          files: |
+            release-artifacts/**/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on related issues
+        uses: actions/github-script@v7
+        if: github.event_name == 'push'
+        with:
+          script: |
+            const fs = require('fs');
+            const issue = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'release',
+              state: 'open',
+              per_page: 5
+            });
+            
+            if (issue.data.length > 0) {
+              for (const item of issue.data) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: item.number,
+                  body: `🎉 Released in [v${{ steps.version.outputs.version }}](https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/v${{ steps.version.outputs.version }})`
+                });
+              }
+            }
