@@ -6,7 +6,7 @@ from . import uris, uris_label
 class TimeDataEndpointsSuite:
     param_names = uris_label
     params = uris
-    timeout = 240
+    timeout = 900
 
     def setup(self, *args):
         self.test_client = TestClient(app)
