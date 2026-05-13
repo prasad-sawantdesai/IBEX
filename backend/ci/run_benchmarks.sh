@@ -36,7 +36,7 @@ python -m venv venv
 echo "PWD: " `pwd`
 
 # PREPARE THE ENVIRONMENT
-pip install --upgrade ./[benchmark]
+pip install --upgrade ".[benchmark]"
 
 # Copy previous results (if any)
 mkdir -p "$BENCHMARKS_DIR/results"

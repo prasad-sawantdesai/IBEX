@@ -85,10 +85,6 @@ benchmark = [
 [project.urls]
 homepage = "https://github.com/iterorganization/IBEX"
 
-[tool.setuptools]
-# license-files must be here, not in [project], for setuptools <77 compatibility
-license-files = ["LICENSE.txt"]
-
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["ibex*"]
