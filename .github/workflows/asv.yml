@@ -11,7 +11,7 @@ jobs:
   benchmark:
     runs-on: ubuntu-22.04
     permissions:
-      contents: write       # needed to push HTML report to gh-pages branch
+      contents: read
 
     steps:
       - name: Checkout code
@@ -110,6 +110,24 @@ jobs:
           echo "FAILED: Performance regression detected (>2x threshold). See benchmark output above."
           exit 1
 
+      - name: Post benchmark results to job summary
+        if: always() && steps.asv.outcome != 'skipped'
+        run: |
+          {
+            echo "## ASV Benchmark Results"
+            echo ""
+            echo "**Run** \`${{ github.run_id }}\` · **Attempt** \`${{ github.run_attempt }}\`"
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              echo "**Comparing** \`origin/${{ github.base_ref }}\` → \`${{ github.sha }}\`"
+            else
+              echo "**Comparing** \`HEAD~1\` → \`HEAD\` (\`${{ github.sha }}\`)"
+            fi
+            echo ""
+            echo '```'
+            cat asv_output.txt 2>/dev/null || echo "(no output — benchmark comparison was skipped)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Generate HTML results
         # Only meaningful on push to develop/main — asv publish builds the branch
         # timeline, so PR commits (not yet on any branch) are simply skipped with
@@ -125,12 +143,11 @@ jobs:
           git fetch origin main:main 2>/dev/null || true
           asv publish
 
-      - name: Deploy HTML report to GitHub Pages
-        # Only run on push to develop/main, same reasoning as Generate HTML above.
+      - name: Upload ASV HTML report
+        id: upload-asv-report
         if: github.event_name != 'pull_request'
-        uses: peaceiris/actions-gh-pages@v4
+        uses: actions/upload-artifact@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: .asv/html
-          destination_dir: benchmarks
-          keep_files: false
+          name: asv-html-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .asv/html
+          retention-days: 30
